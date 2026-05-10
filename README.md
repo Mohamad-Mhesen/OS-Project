@@ -1,10 +1,9 @@
 # Traffic Simulation in a Directed Graph
 
 ## Group Members
-- **Student 1**: Algorithm implementation and graph logic.
-- **Student 2**: GUI development and visualization.
-- **Student 3**: Process management and synchronization.
-- **Student 4**: IPC and scheduling.
+- **Student 1**: Mohamad Mhesen
+- **Student 2**: Omar Talgi
+- **Student 3**: Nagham Idies
 
 ## Project Description
 This project simulates a traffic system where multiple passengers (represented as processes) move simultaneously through a directed graph. The simulation incorporates core operating system concepts such as process management, synchronization, IPC, and scheduling.

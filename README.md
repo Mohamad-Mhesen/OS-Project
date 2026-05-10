@@ -1,4 +1,4 @@
-# Traffic Simulation in a Directed Graph
+# OS Project 
 
 ## Group Members
 - **Student 1**: Mohamad Mhesen

@@ -306,7 +306,9 @@ int main(int argc, char* argv[]) {
         // Logic
         Rectangle btnRect = { 10, 40, 100, 30 };
         if (CheckCollisionPointRec(GetMousePosition(), btnRect) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-            if (state == STATE_STOPPED || state == STATE_FINISHED) {
+            if (state == STATE_STOPPED) {
+                state = STATE_PLAYING;
+            } else if (state == STATE_FINISHED) {
                 state = STATE_PLAYING;
                 currentPathIdx = 0;
                 currentJump = 0;
@@ -322,8 +324,6 @@ int main(int argc, char* argv[]) {
                 state = STATE_FINISHED;
             } else if (currentPathIdx < pathCount - 1) {
                 state = STATE_MOVING_EDGE;
-                timer = 0.0f;
-                currentJump = 0;
             } else {
                 state = STATE_FINISHED;
             }
@@ -399,7 +399,7 @@ int main(int argc, char* argv[]) {
             DrawText(id, nodes[i].x - MeasureText(id, 20)/2, nodes[i].y - 10, 20, BLACK);
         }
 
-        if (state != STATE_STOPPED) {
+        if (state != STATE_STOPPED || (state == STATE_STOPPED && currentPathIdx < pathCount)) {
             DrawCircleV(entityPos, 15, RED);
             DrawCircleLinesV(entityPos, 15, MAROON);
         }

@@ -4,9 +4,18 @@
 #include <stdbool.h>
 #include <math.h>
 
-#if defined(MILESTONE2) || defined(MILESTONE3)
+#if defined(MILESTONE2) || defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5)
 #include "raylib.h"
 #include "raymath.h"
+#endif
+#if defined(MILESTONE4) || defined(MILESTONE5)
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
+#endif
+
+#ifdef MILESTONE5
+#include <fcntl.h>
 #endif
 
 #define INF INT_MAX
@@ -23,8 +32,35 @@ typedef struct {
     float x, y; // Added for GUI positioning
 } Node;
 
-#if defined(MILESTONE3) || defined(MILESTONE4)
-typedef enum { STATE_STOPPED, STATE_PLAYING, STATE_WAITING_NODE, STATE_MOVING_EDGE, STATE_FINISHED } AnimState;
+#if defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5)
+typedef enum {
+    STATE_STOPPED,
+    STATE_PLAYING,
+    STATE_WAITING_NODE,
+    STATE_MOVING_EDGE,
+    STATE_FINISHED
+} AnimState;
+
+#if defined(MILESTONE4) || defined(MILESTONE5)typedef struct {
+
+typedef struct {
+    pid_t pid;
+    int startNode;
+    int endNode;
+
+    int* path;
+    int pathCount;
+
+    int currentPathIdx;
+    int currentJump;
+
+    float timer;
+    Vector2 position;
+    Color color;
+
+    AnimState state;
+} Traveler;
+#endif
 #endif
 
 void add_edge(Node* nodes, int src, int dst, int weight) {
@@ -45,7 +81,6 @@ void print_path(int* parent, int j) {
     print_path(parent, parent[j]);
     printf(" -> %d", j);
 }
-
 #if defined(MILESTONE2) || defined(MILESTONE3) || defined(MILESTONE4)
 void DrawArrow(Vector2 start, Vector2 end, int weight) {
     float angle = atan2f(end.y - start.y, end.x - start.x);
@@ -85,134 +120,85 @@ void DrawArrow(Vector2 start, Vector2 end, int weight) {
     char weightText[16];
     sprintf(weightText, "%d", weight);
     Vector2 midPoint = { (lineStart.x + lineEnd.x) / 2, (lineStart.y + lineEnd.y) / 2 };
-    
+
     // Offset weight text slightly to the side of the line for better readability
     midPoint.x += cosf(angle + PI/2) * 20;
     midPoint.y += sinf(angle + PI/2) * 20;
-    
+
     DrawText(weightText, midPoint.x - 5, midPoint.y - 5, 18, DARKBLUE);
 }
 #endif
-#ifdef MILESTONE4
-// Run Dijkstra from src to dst, fill path[] and path_count. Returns total distance or INF.
-int run_dijkstra(Node* nodes, int N, int src, int dst, int** out_path, int* out_count) {
+
+
+int build_path(Node* nodes, int N, int start, int end, int** outPath) {
     int* dist = malloc(N * sizeof(int));
     int* parent = malloc(N * sizeof(int));
     bool* visited = calloc(N, sizeof(bool));
 
-    for (int i = 0; i < N; i++) { dist[i] = INF; parent[i] = -1; }
-    dist[src] = 0;
+    for (int i = 0; i < N; i++) {
+        dist[i] = INF;
+        parent[i] = -1;
+    }
+
+    dist[start] = 0;
 
     for (int count = 0; count < N - 1; count++) {
-        int u = -1, min_dist = INF;
-        for (int v = 0; v < N; v++)
-            if (!visited[v] && dist[v] <= min_dist) { min_dist = dist[v]; u = v; }
+        int u = -1;
+        int min_dist = INF;
+
+        for (int v = 0; v < N; v++) {
+            if (!visited[v] && dist[v] <= min_dist) {
+                min_dist = dist[v];
+                u = v;
+            }
+        }
+
         if (u == -1 || dist[u] == INF) break;
         visited[u] = true;
+
         for (int i = 0; i < nodes[u].count; i++) {
             int v = nodes[u].edges[i].to;
-            int w = nodes[u].edges[i].weight;
-            if (!visited[v] && dist[u] + w < dist[v]) {
-                dist[v] = dist[u] + w;
+            int weight = nodes[u].edges[i].weight;
+
+            if (!visited[v] && dist[u] != INF && dist[u] + weight < dist[v]) {
+                dist[v] = dist[u] + weight;
                 parent[v] = u;
             }
         }
     }
 
-    int result = dist[dst];
-    if (result != INF) {
-        int pcount = 0, curr = dst;
-        while (curr != -1) { pcount++; curr = parent[curr]; }
-        int* path = malloc(pcount * sizeof(int));
-        curr = dst;
-        for (int i = pcount - 1; i >= 0; i--) { path[i] = curr; curr = parent[curr]; }
-        *out_path = path;
-        *out_count = pcount;
-    } else {
-        *out_path = NULL;
-        *out_count = 0;
+    if (dist[end] == INF) {
+        free(dist);
+        free(parent);
+        free(visited);
+        *outPath = NULL;
+        return 0;
     }
 
-    free(dist); free(parent); free(visited);
-    return result;
+    int pathCount = 0;
+    int curr = end;
+
+    while (curr != -1) {
+        pathCount++;
+        curr = parent[curr];
+    }
+
+    int* path = malloc(pathCount * sizeof(int));
+    curr = end;
+
+    for (int i = pathCount - 1; i >= 0; i--) {
+        path[i] = curr;
+        curr = parent[curr];
+    }
+
+    free(dist);
+    free(parent);
+    free(visited);
+
+    *outPath = path;
+    return pathCount;
 }
 
-// Child process: simulate one traveler moving along its path, write position to shared memory
-void simulate_traveler(Node* nodes, Traveler* trav, TravelerState* state) {
-    int pathCount = trav->path_count;
-    int* path = trav->path;
-
-    if (pathCount <= 1) {
-        if (pathCount == 1) {
-            state->x = nodes[path[0]].x;
-            state->y = nodes[path[0]].y;
-        }
-        state->finished = 1;
-        state->state = STATE_FINISHED;
-        return;
-    }
-
-    state->x = nodes[path[0]].x;
-    state->y = nodes[path[0]].y;
-    state->finished = 0;
-    state->state = STATE_PLAYING;
-
-    int currentPathIdx = 0;
-    int currentJump = 0;
-    float timer = 0.0f;
-    const float dt = 1.0f / 60.0f; // simulate at ~60 ticks/sec
-    const float jumpDuration = 0.3f;
-
-    state->state = STATE_MOVING_EDGE;
-
-    while (currentPathIdx < pathCount - 1) {
-        int u = path[currentPathIdx];
-        int v = path[currentPathIdx + 1];
-        int weight = 0;
-        for (int i = 0; i < nodes[u].count; i++)
-            if (nodes[u].edges[i].to == v) { weight = nodes[u].edges[i].weight; break; }
-
-        timer += dt;
-
-        if (timer >= jumpDuration) {
-            timer -= jumpDuration;
-            currentJump++;
-            if (currentJump >= weight) {
-                currentPathIdx++;
-                currentJump = 0;
-                if (currentPathIdx < pathCount - 1) {
-                    // brief pause at intermediate node
-                    state->state = STATE_WAITING_NODE;
-                    state->x = nodes[path[currentPathIdx]].x;
-                    state->y = nodes[path[currentPathIdx]].y;
-                    usleep((int)(1.0f * 1000000)); // 1 second wait
-                    state->state = STATE_MOVING_EDGE;
-                    timer = 0.0f;
-                }
-            }
-        }
-
-        Vector2 start = { nodes[u].x, nodes[u].y };
-        Vector2 end = { nodes[v].x, nodes[v].y };
-        float jumpProgress = timer / jumpDuration;
-        if (jumpProgress > 1.0f) jumpProgress = 1.0f;
-        float totalProgress = ((float)currentJump + jumpProgress) / weight;
-
-        state->x = start.x + (end.x - start.x) * totalProgress;
-        state->y = start.y + (end.y - start.y) * totalProgress;
-
-        float hopHeight = sinf(jumpProgress * PI) * 30.0f;
-        state->y -= hopHeight;
-
-        usleep((int)(dt * 1000000));
-    }
-
-    state->x = nodes[path[pathCount - 1]].x;
-    state->y = nodes[path[pathCount - 1]].y;
-    state->finished = 1;
-    state->state = STATE_FINISHED;
-}
-#endif
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <file_name>\n", argv[0]);
@@ -255,7 +241,30 @@ int main(int argc, char* argv[]) {
         }
         add_edge(nodes, src, dst, weight);
     }
-#ifndef MILESTONE4
+
+#if defined(MILESTONE4) || defined(MILESTONE5)
+    int travelerCount;
+    if (fscanf(fp, "%d", &travelerCount) != 1) {
+        fprintf(stderr, "Invalid travelers count\n");
+        goto cleanup;
+    }
+
+    int* startNodes = malloc(travelerCount * sizeof(int));
+    int* endNodes = malloc(travelerCount * sizeof(int));
+
+    for (int i = 0; i < travelerCount; i++) {
+        if (fscanf(fp, "%d %d", &startNodes[i], &endNodes[i]) != 2) {
+            fprintf(stderr, "Invalid traveler format\n");
+            goto cleanup;
+        }
+
+        if (startNodes[i] < 0 || startNodes[i] >= N ||
+            endNodes[i] < 0 || endNodes[i] >= N) {
+            fprintf(stderr, "Invalid traveler node\n");
+            goto cleanup;
+            }
+    }
+#else
     int start_node, end_node;
     if (fscanf(fp, "%d %d", &start_node, &end_node) != 2) {
         fprintf(stderr, "Invalid start/end node format\n");
@@ -274,9 +283,7 @@ int main(int argc, char* argv[]) {
 #endif
     }
 #endif
-
-#if !defined(MILESTONE2) && !defined(MILESTONE3)&&!defined(MILESTONE4)
-
+#if !defined(MILESTONE2) && !defined(MILESTONE3) && !defined(MILESTONE4) && !defined(MILESTONE5)
     int* dist = malloc(N * sizeof(int));
     int* parent = malloc(N * sizeof(int));
     bool* visited = calloc(N, sizeof(bool));
@@ -373,7 +380,310 @@ int main(int argc, char* argv[]) {
     }
 
     CloseWindow();
-#else defined(MILESTONE3)
+#elif defined(MILESTONE4)
+    Color colors[] = { RED, BLUE, GREEN, ORANGE, PURPLE, MAROON, DARKGREEN, PINK };
+    Traveler* travelers = calloc(travelerCount, sizeof(Traveler));
+
+    const int screenWidth = 800;
+    const int screenHeight = 600;
+
+    float centerX = screenWidth / 2.0f;
+    float centerY = screenHeight / 2.0f;
+    float radius = 200.0f;
+
+    for (int i = 0; i < N; i++) {
+        float angle = (2 * PI * i) / N;
+        nodes[i].x = centerX + cosf(angle) * radius;
+        nodes[i].y = centerY + sinf(angle) * radius;
+    }
+
+    for (int i = 0; i < travelerCount; i++) {
+        travelers[i].startNode = startNodes[i];
+        travelers[i].endNode = endNodes[i];
+        travelers[i].pathCount = build_path(nodes, N, startNodes[i], endNodes[i], &travelers[i].path);
+        travelers[i].currentPathIdx = 0;
+        travelers[i].currentJump = 0;
+        travelers[i].timer = 0.0f;
+        travelers[i].color = colors[i % 8];
+        travelers[i].state = STATE_PLAYING;
+        travelers[i].position = (Vector2){ nodes[startNodes[i]].x, nodes[startNodes[i]].y };
+
+        pid_t pid = fork();
+
+        if (pid == 0) {
+            printf("[%d] started\n", getpid());
+            while (1) {
+                pause();
+            }
+            exit(0);
+        } else if (pid > 0) {
+            travelers[i].pid = pid;
+        } else {
+            perror("fork failed");
+        }
+    }
+
+    InitWindow(screenWidth, screenHeight, "Milestone 4 - Multiple Travelers");
+    SetTargetFPS(60);
+
+    bool allFinished = false;
+
+    while (!WindowShouldClose() && !allFinished) {
+        float dt = GetFrameTime();
+        allFinished = true;
+
+        for (int t = 0; t < travelerCount; t++) {
+            Traveler* tr = &travelers[t];
+
+            if (tr->state != STATE_FINISHED && tr->pathCount > 1) {
+                allFinished = false;
+
+                if (tr->currentPathIdx < tr->pathCount - 1) {
+                    tr->state = STATE_MOVING_EDGE;
+
+                    int u = tr->path[tr->currentPathIdx];
+                    int v = tr->path[tr->currentPathIdx + 1];
+
+                    int weight = 1;
+                    for (int i = 0; i < nodes[u].count; i++) {
+                        if (nodes[u].edges[i].to == v) {
+                            weight = nodes[u].edges[i].weight;
+                            break;
+                        }
+                    }
+
+                    tr->timer += dt;
+
+                    if (tr->timer >= 0.3f) {
+                        tr->timer -= 0.3f;
+                        tr->currentJump++;
+
+                        if (tr->currentJump >= weight) {
+                            tr->currentPathIdx++;
+                            tr->currentJump = 0;
+                            tr->timer = 0.0f;
+
+                            if (tr->currentPathIdx >= tr->pathCount - 1) {
+                                tr->state = STATE_FINISHED;
+                                tr->position = (Vector2){
+                                    nodes[tr->path[tr->currentPathIdx]].x,
+                                    nodes[tr->path[tr->currentPathIdx]].y
+                                };
+
+                                kill(tr->pid, SIGTERM);
+                                printf("[%d] finished\n", tr->pid);
+                            }
+                        }
+                    }
+
+                    if (tr->state != STATE_FINISHED) {
+                        Vector2 start = { nodes[u].x, nodes[u].y };
+                        Vector2 end = { nodes[v].x, nodes[v].y };
+
+                        float jumpProgress = tr->timer / 0.3f;
+                        if (jumpProgress > 1.0f) jumpProgress = 1.0f;
+
+                        float totalProgress = ((float)tr->currentJump + jumpProgress) / weight;
+
+                        tr->position.x = start.x + (end.x - start.x) * totalProgress;
+                        tr->position.y = start.y + (end.y - start.y) * totalProgress;
+                    }
+                }
+            }
+        }
+
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
+
+        DrawText("Milestone 4: Multiple Processes and Parent Process", 10, 10, 20, DARKGRAY);
+
+        for (int i = 0; i < N; i++) {
+            for (int j = 0; j < nodes[i].count; j++) {
+                DrawArrow(
+                    (Vector2){ nodes[i].x, nodes[i].y },
+                    (Vector2){ nodes[nodes[i].edges[j].to].x, nodes[nodes[i].edges[j].to].y },
+                    nodes[i].edges[j].weight
+                );
+            }
+        }
+
+        for (int i = 0; i < N; i++) {
+            DrawCircle(nodes[i].x, nodes[i].y, 25, SKYBLUE);
+            DrawCircleLines(nodes[i].x, nodes[i].y, 25, BLUE);
+
+            char id[12];
+            sprintf(id, "%d", i);
+            DrawText(id, nodes[i].x - MeasureText(id, 20) / 2, nodes[i].y - 10, 20, BLACK);
+        }
+
+        for (int t = 0; t < travelerCount; t++) {
+            DrawCircleV(travelers[t].position, 15, travelers[t].color);
+            DrawCircleLinesV(travelers[t].position, 15, BLACK);
+        }
+
+        EndDrawing();
+    }
+
+    CloseWindow();
+
+    for (int i = 0; i < travelerCount; i++) {
+        if (travelers[i].pid > 0) {
+            kill(travelers[i].pid, SIGTERM);
+            waitpid(travelers[i].pid, NULL, 0);
+        }
+        free(travelers[i].path);
+    }
+
+    free(travelers);
+    free(startNodes);
+    free(endNodes);
+
+#elif defined(MILESTONE5)
+        typedef struct {
+        pid_t pid;
+        int travelerIndex;
+        int currentNode;
+        int nextNode;
+        int finished;
+    } IPCMessage;
+
+    Color colors[] = { RED, BLUE, GREEN, ORANGE, PURPLE, MAROON, DARKGREEN, PINK };
+    Traveler* travelers = calloc(travelerCount, sizeof(Traveler));
+    int (*pipes)[2] = malloc(travelerCount * sizeof(int[2]));
+
+    const int screenWidth = 800;
+    const int screenHeight = 600;
+
+    float centerX = screenWidth / 2.0f;
+    float centerY = screenHeight / 2.0f;
+    float radius = 200.0f;
+
+    for (int i = 0; i < N; i++) {
+        float angle = (2 * PI * i) / N;
+        nodes[i].x = centerX + cosf(angle) * radius;
+        nodes[i].y = centerY + sinf(angle) * radius;
+    }
+
+    for (int i = 0; i < travelerCount; i++) {
+        if (pipe(pipes[i]) == -1) {
+            perror("pipe failed");
+            continue;
+        }
+
+        travelers[i].startNode = startNodes[i];
+        travelers[i].endNode = endNodes[i];
+        travelers[i].color = colors[i % 8];
+        travelers[i].position = (Vector2){ nodes[startNodes[i]].x, nodes[startNodes[i]].y };
+        travelers[i].state = STATE_PLAYING;
+
+        pid_t pid = fork();
+
+        if (pid == 0) {
+            close(pipes[i][0]);
+
+            int* childPath = NULL;
+            int childPathCount = build_path(nodes, N, startNodes[i], endNodes[i], &childPath);
+
+            for (int p = 0; p < childPathCount; p++) {
+                IPCMessage msg;
+                msg.pid = getpid();
+                msg.travelerIndex = i;
+                msg.currentNode = childPath[p];
+                msg.nextNode = (p + 1 < childPathCount) ? childPath[p + 1] : -1;
+                msg.finished = (p == childPathCount - 1);
+
+                write(pipes[i][1], &msg, sizeof(IPCMessage));
+                sleep(1);
+            }
+
+            free(childPath);
+            close(pipes[i][1]);
+            exit(0);
+        } else if (pid > 0) {
+            travelers[i].pid = pid;
+            close(pipes[i][1]);
+            fcntl(pipes[i][0], F_SETFL, O_NONBLOCK);
+        } else {
+            perror("fork failed");
+        }
+    }
+
+    InitWindow(screenWidth, screenHeight, "Milestone 5 - IPC");
+    SetTargetFPS(60);
+
+    bool allFinished = false;
+
+    while (!WindowShouldClose() && !allFinished) {
+        allFinished = true;
+
+        for (int i = 0; i < travelerCount; i++) {
+            IPCMessage msg;
+
+            while (read(pipes[i][0], &msg, sizeof(IPCMessage)) > 0) {
+                travelers[msg.travelerIndex].position =
+                    (Vector2){ nodes[msg.currentNode].x, nodes[msg.currentNode].y };
+
+                if (msg.finished) {
+                    travelers[msg.travelerIndex].state = STATE_FINISHED;
+                    printf("[PID=%d] arrived at node %d | DESTINATION\n", msg.pid, msg.currentNode);
+                    printf("[PID=%d] finished\n", msg.pid);
+                } else {
+                    printf("[PID=%d] arrived at node %d | next node: %d\n",
+                           msg.pid, msg.currentNode, msg.nextNode);
+                }
+            }
+
+            if (travelers[i].state != STATE_FINISHED) {
+                allFinished = false;
+            }
+        }
+
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
+
+        DrawText("Milestone 5: IPC between processes", 10, 10, 20, DARKGRAY);
+
+        for (int i = 0; i < N; i++) {
+            for (int j = 0; j < nodes[i].count; j++) {
+                DrawArrow(
+                    (Vector2){ nodes[i].x, nodes[i].y },
+                    (Vector2){ nodes[nodes[i].edges[j].to].x, nodes[nodes[i].edges[j].to].y },
+                    nodes[i].edges[j].weight
+                );
+            }
+        }
+
+        for (int i = 0; i < N; i++) {
+            DrawCircle(nodes[i].x, nodes[i].y, 25, SKYBLUE);
+            DrawCircleLines(nodes[i].x, nodes[i].y, 25, BLUE);
+
+            char id[12];
+            sprintf(id, "%d", i);
+            DrawText(id, nodes[i].x - MeasureText(id, 20) / 2, nodes[i].y - 10, 20, BLACK);
+        }
+
+        for (int i = 0; i < travelerCount; i++) {
+            DrawCircleV(travelers[i].position, 15, travelers[i].color);
+            DrawCircleLinesV(travelers[i].position, 15, BLACK);
+        }
+
+        EndDrawing();
+    }
+
+    CloseWindow();
+
+    for (int i = 0; i < travelerCount; i++) {
+        close(pipes[i][0]);
+        waitpid(travelers[i].pid, NULL, 0);
+    }
+
+    free(pipes);
+    free(travelers);
+    free(startNodes);
+    free(endNodes);
+
+
+#else
     // GUI Implementation for Milestone 3
     int* dist = malloc(N * sizeof(int));
     int* parent = malloc(N * sizeof(int));
@@ -423,7 +733,7 @@ int main(int argc, char* argv[]) {
     SetTargetFPS(60);
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
-        
+
         // Logic
         Rectangle btnRect = { 10, 40, 100, 30 };
         if (CheckCollisionPointRec(GetMousePosition(), btnRect) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
@@ -456,7 +766,7 @@ int main(int argc, char* argv[]) {
             int v = path[currentPathIdx + 1];
             int weight = 0;
             for(int i=0; i<nodes[u].count; i++) if(nodes[u].edges[i].to == v) { weight = nodes[u].edges[i].weight; break; }
-            
+
             if (timer >= 0.3f) {
                 timer -= 0.3f;
                 currentJump++;
@@ -469,23 +779,23 @@ int main(int argc, char* argv[]) {
                     else { state = STATE_WAITING_NODE; timer = 0.0f; }
                 }
             }
-            
+
             // Smooth Jump-based Interpolation
             if (state == STATE_MOVING_EDGE) {
                 Vector2 start = { nodes[u].x, nodes[u].y };
                 Vector2 end = { nodes[v].x, nodes[v].y };
-                
+
                 // Calculate progress: completed jumps + current jump progress
                 float jumpProgress = timer / 0.3f;
                 if (jumpProgress > 1.0f) jumpProgress = 1.0f;
-                
+
                 float totalProgress = ((float)currentJump + jumpProgress) / weight;
-                
+
                 entityPos.x = start.x + (end.x - start.x) * totalProgress;
                 entityPos.y = start.y + (end.y - start.y) * totalProgress;
-                
+
                 // Add a "hop" effect during the jump timer
-                float hopHeight = sinf(jumpProgress * PI) * 30.0f; 
+                float hopHeight = sinf(jumpProgress * PI) * 30.0f;
                 entityPos.y -= hopHeight;
             }
         } else if (state == STATE_WAITING_NODE) {
@@ -501,7 +811,7 @@ int main(int argc, char* argv[]) {
         BeginDrawing();
         ClearBackground(RAYWHITE);
         DrawText("Milestone 3: Animation", 10, 10, 20, DARKGRAY);
-        
+
         // Button
         DrawRectangleRec(btnRect, LIGHTGRAY);
         DrawRectangleLinesEx(btnRect, 2, GRAY);
@@ -535,164 +845,6 @@ int main(int argc, char* argv[]) {
     }
     CloseWindow();
     free(dist); free(parent); free(visited); if(path) free(path);
-#else
-    // ===================== MILESTONE 4: Multiple travelers via fork() =====================
-
-    int num_travelers;
-    if (fscanf(fp, "%d", &num_travelers) != 1) {
-        fprintf(stderr, "Invalid traveler count\n");
-        goto cleanup;
-    }
-    if (num_travelers <= 0 || num_travelers > MAX_TRAVELERS) {
-        fprintf(stderr, "Invalid number of travelers\n");
-        goto cleanup;
-    }
-
-    Traveler* travelers = malloc(num_travelers * sizeof(Traveler));
-    for (int t = 0; t < num_travelers; t++) {
-        int s, e;
-        if (fscanf(fp, "%d %d", &s, &e) != 2) {
-            fprintf(stderr, "Invalid traveler format\n");
-            goto cleanup;
-        }
-        if (s < 0 || s >= N || e < 0 || e >= N) {
-            fprintf(stderr, "Invalid traveler start/end node\n");
-            goto cleanup;
-        }
-        travelers[t].start_node = s;
-        travelers[t].end_node = e;
-
-        if (s == e) {
-            printf("%d\n0\n", s);
-            travelers[t].path = malloc(sizeof(int));
-            travelers[t].path[0] = s;
-            travelers[t].path_count = 1;
-        } else {
-            int* path; int pcount;
-            int total = run_dijkstra(nodes, N, s, e, &path, &pcount);
-            if (total == INF) {
-                printf("No path found\n");
-                travelers[t].path = NULL;
-                travelers[t].path_count = 0;
-            } else {
-                for (int i = 0; i < pcount; i++) {
-                    printf(i == 0 ? "%d" : " -> %d", path[i]);
-                }
-                printf("\n%d\n", total);
-                travelers[t].path = path;
-                travelers[t].path_count = pcount;
-            }
-        }
-    }
-
-    // Shared memory: one TravelerState per traveler
-    TravelerState* shared_states = mmap(NULL, num_travelers * sizeof(TravelerState),
-                                         PROT_READ | PROT_WRITE,
-                                         MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (shared_states == MAP_FAILED) {
-        perror("mmap failed");
-        goto cleanup;
-    }
-
-    for (int t = 0; t < num_travelers; t++) {
-        shared_states[t].x = nodes[travelers[t].start_node].x;
-        shared_states[t].y = nodes[travelers[t].start_node].y;
-        shared_states[t].state = STATE_STOPPED;
-        shared_states[t].finished = (travelers[t].path_count <= 1) ? 1 : 0;
-    }
-
-    // Fork one child process per traveler
-    pid_t* child_pids = malloc(num_travelers * sizeof(pid_t));
-    for (int t = 0; t < num_travelers; t++) {
-        pid_t pid = fork();
-        if (pid < 0) {
-            perror("fork failed");
-            goto cleanup;
-        } else if (pid == 0) {
-            // Child process: simulate this traveler's movement
-            simulate_traveler(nodes, &travelers[t], &shared_states[t]);
-            _exit(0);
-        } else {
-            child_pids[t] = pid;
-            printf("[%d] started\n", pid);
-        }
-    }
-
-    // Parent process: draw the GUI showing all travelers simultaneously
-    const int screenWidth = 800;
-    const int screenHeight = 600;
-    InitWindow(screenWidth, screenHeight, "Traffic Simulation - Multiple Travelers");
-
-    float centerX = screenWidth / 2.0f;
-    float centerY = screenHeight / 2.0f;
-    float radius = 200.0f;
-    for (int i = 0; i < N; i++) {
-        float angle = (2 * PI * i) / N;
-        nodes[i].x = centerX + cosf(angle) * radius;
-        nodes[i].y = centerY + sinf(angle) * radius;
-    }
-
-    Color travelerColors[MAX_TRAVELERS] = {
-        RED, GREEN, BLUE, ORANGE, PURPLE, PINK, LIME, GOLD,
-        VIOLET, MAROON, DARKGREEN, DARKBLUE, BROWN, MAGENTA, BLACK, DARKPURPLE
-    };
-
-    SetTargetFPS(60);
-    while (!WindowShouldClose()) {
-        BeginDrawing();
-        ClearBackground(RAYWHITE);
-        DrawText("Milestone 4: Multiple Travelers", 10, 10, 20, DARKGRAY);
-
-        // Draw graph edges
-        for (int i = 0; i < N; i++) {
-            for (int j = 0; j < nodes[i].count; j++) {
-                DrawArrow((Vector2){nodes[i].x, nodes[i].y},
-                          (Vector2){nodes[nodes[i].edges[j].to].x, nodes[nodes[i].edges[j].to].y},
-                          nodes[i].edges[j].weight);
-            }
-        }
-
-        // Draw graph nodes
-        for (int i = 0; i < N; i++) {
-            DrawCircle(nodes[i].x, nodes[i].y, 25, SKYBLUE);
-            DrawCircleLines(nodes[i].x, nodes[i].y, 25, BLUE);
-            char id[12]; sprintf(id, "%d", i);
-            DrawText(id, nodes[i].x - MeasureText(id, 20)/2, nodes[i].y - 10, 20, BLACK);
-        }
-
-        // Draw each traveler from shared memory state
-        bool all_finished = true;
-        for (int t = 0; t < num_travelers; t++) {
-            if (travelers[t].path_count > 0) {
-                Color c = travelerColors[t % MAX_TRAVELERS];
-                DrawCircleV((Vector2){shared_states[t].x, shared_states[t].y}, 15, c);
-                DrawCircleLinesV((Vector2){shared_states[t].x, shared_states[t].y}, 15, BLACK);
-                char label[8]; sprintf(label, "T%d", t);
-                DrawText(label, shared_states[t].x - 10, shared_states[t].y - 30, 16, BLACK);
-            }
-            if (!shared_states[t].finished) all_finished = false;
-        }
-
-        if (all_finished) {
-            DrawText("All travelers reached their destinations!", screenWidth/2 - 200, 50, 20, GREEN);
-        }
-
-        EndDrawing();
-    }
-    CloseWindow();
-
-    // Wait for all children to finish (avoid zombie processes)
-    for (int t = 0; t < num_travelers; t++) {
-        waitpid(child_pids[t], NULL, 0);
-    }
-
-    munmap(shared_states, num_travelers * sizeof(TravelerState));
-    free(child_pids);
-    for (int t = 0; t < num_travelers; t++) {
-        if (travelers[t].path) free(travelers[t].path);
-    }
-    free(travelers);
-#endif
 #endif
 
 cleanup:

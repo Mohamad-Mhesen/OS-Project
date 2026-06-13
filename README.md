@@ -28,5 +28,17 @@ The graph represents a city's metro network where trains move between stations b
 - **Execution**: `./sim <file_name>`
 - **Description**: Adds animation of an entity moving along the shortest path calculated by Dijkstra. Includes Play/Stop functionality and realistic timing (waiting at nodes and jumping on edges).
 
+## Milestone 4: Multiple Processes
+
+- Compilation: `make milestone4`
+- Execution: `./sim <file_name>`
+- Description: Extends the animation by creating multiple traveler processes using `fork()`. Each traveler independently calculates and follows its shortest path while being visualized in the GUI.
+
+## Milestone 5: Inter-Process Communication (IPC)
+
+- Compilation: `make milestone5`
+- Execution: `./sim <file_name>`
+- Description: Adds IPC mechanisms between traveler processes and the parent process. Travelers report their movement updates, allowing the GUI to display real-time progress and synchronization.
+
 ## General
 - **Clean Project**: `make clean`

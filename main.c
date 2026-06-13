@@ -1,21 +1,28 @@
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <math.h>
 
-#if defined(MILESTONE2) || defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5)
+#if defined(MILESTONE2) || defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
 #include "raylib.h"
 #include "raymath.h"
 #endif
-#if defined(MILESTONE4) || defined(MILESTONE5)
+#if defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
 #endif
 
-#ifdef MILESTONE5
+#if defined(MILESTONE5) || defined(MILESTONE6)
 #include <fcntl.h>
+#endif
+
+#ifdef MILESTONE6
+#include <semaphore.h>
+#include <sys/mman.h>
 #endif
 
 #define INF INT_MAX
@@ -32,7 +39,7 @@ typedef struct {
     float x, y; // Added for GUI positioning
 } Node;
 
-#if defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5)
+#if defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
 typedef enum {
     STATE_STOPPED,
     STATE_PLAYING,
@@ -41,8 +48,7 @@ typedef enum {
     STATE_FINISHED
 } AnimState;
 
-#if defined(MILESTONE4) || defined(MILESTONE5)typedef struct {
-
+#if defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
 typedef struct {
     pid_t pid;
     int startNode;
@@ -59,6 +65,10 @@ typedef struct {
     Color color;
 
     AnimState state;
+    int waitingAtNode; // -1 if not waiting, else node index (Milestone 6)
+    Vector2 targetPosition; // Milestone 5/6 smooth movement
+    int nextNodeIdx; // Milestone 5/6 smooth movement
+    bool pendingFinish; // Added to handle delayed finish after smooth movement
 } Traveler;
 #endif
 #endif
@@ -81,7 +91,7 @@ void print_path(int* parent, int j) {
     print_path(parent, parent[j]);
     printf(" -> %d", j);
 }
-#if defined(MILESTONE2) || defined(MILESTONE3) || defined(MILESTONE4)
+#if defined(MILESTONE2) || defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
 void DrawArrow(Vector2 start, Vector2 end, int weight) {
     float angle = atan2f(end.y - start.y, end.x - start.x);
     float arrowSize = 15.0f;
@@ -153,18 +163,18 @@ int build_path(Node* nodes, int N, int start, int end, int** outPath) {
             }
         }
 
-        if (u == -1 || dist[u] == INF) break;
-        visited[u] = true;
+    if (u == -1 || dist[u] == INF) break;
+    visited[u] = true;
 
-        for (int i = 0; i < nodes[u].count; i++) {
-            int v = nodes[u].edges[i].to;
-            int weight = nodes[u].edges[i].weight;
+    for (int i = 0; i < nodes[u].count; i++) {
+        int v = nodes[u].edges[i].to;
+        int weight = nodes[u].edges[i].weight;
 
-            if (!visited[v] && dist[u] != INF && dist[u] + weight < dist[v]) {
-                dist[v] = dist[u] + weight;
-                parent[v] = u;
-            }
+        if (dist[u] != INF && dist[u] + weight < dist[v]) {
+            dist[v] = dist[u] + weight;
+            parent[v] = u;
         }
+    }
     }
 
     if (dist[end] == INF) {
@@ -242,7 +252,7 @@ int main(int argc, char* argv[]) {
         add_edge(nodes, src, dst, weight);
     }
 
-#if defined(MILESTONE4) || defined(MILESTONE5)
+#if defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
     int travelerCount;
     if (fscanf(fp, "%d", &travelerCount) != 1) {
         fprintf(stderr, "Invalid travelers count\n");
@@ -283,7 +293,7 @@ int main(int argc, char* argv[]) {
 #endif
     }
 #endif
-#if !defined(MILESTONE2) && !defined(MILESTONE3) && !defined(MILESTONE4) && !defined(MILESTONE5)
+#if !defined(MILESTONE2) && !defined(MILESTONE3) && !defined(MILESTONE4) && !defined(MILESTONE5) && !defined(MILESTONE6)
     int* dist = malloc(N * sizeof(int));
     int* parent = malloc(N * sizeof(int));
     bool* visited = calloc(N, sizeof(bool));
@@ -404,7 +414,9 @@ int main(int argc, char* argv[]) {
         travelers[i].currentPathIdx = 0;
         travelers[i].currentJump = 0;
         travelers[i].timer = 0.0f;
-        travelers[i].color = colors[i % 8];
+        if (i == 0) travelers[i].color = RED;
+        else if (i == 1) travelers[i].color = GREEN;
+        else travelers[i].color = colors[i % 8];
         travelers[i].state = STATE_PLAYING;
         travelers[i].position = (Vector2){ nodes[startNodes[i]].x, nodes[startNodes[i]].y };
 
@@ -426,19 +438,57 @@ int main(int argc, char* argv[]) {
     InitWindow(screenWidth, screenHeight, "Milestone 4 - Multiple Travelers");
     SetTargetFPS(60);
 
-    bool allFinished = false;
+    bool paused = false;
 
-    while (!WindowShouldClose() && !allFinished) {
+    while (!WindowShouldClose()) {
         float dt = GetFrameTime();
-        allFinished = true;
+
+        Rectangle btnRect = { 10, 40, 120, 40 };
+        Vector2 mousePos = GetMousePosition();
+        bool hovered = CheckCollisionPointRec(mousePos, btnRect);
+
+        bool allFinished = true;
+        for (int t = 0; t < travelerCount; t++) {
+            if (travelers[t].state != STATE_FINISHED) {
+                allFinished = false;
+                break;
+            }
+        }
+
+        if (hovered && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+            if (allFinished) {
+                // Restart simulation
+                for (int t = 0; t < travelerCount; t++) {
+                    if (travelers[t].pid > 0) {
+                        kill(travelers[t].pid, SIGKILL);
+                        waitpid(travelers[t].pid, NULL, 0);
+                    }
+                    travelers[t].currentPathIdx = 0;
+                    travelers[t].currentJump = 0;
+                    travelers[t].timer = 0.0f;
+                    travelers[t].state = STATE_PLAYING;
+                    travelers[t].position = (Vector2){ nodes[travelers[t].startNode].x, nodes[travelers[t].startNode].y };
+
+                    pid_t pid = fork();
+                    if (pid == 0) {
+                        printf("[%d] started\n", getpid());
+                        while (1) pause();
+                        exit(0);
+                    } else if (pid > 0) {
+                        travelers[t].pid = pid;
+                    }
+                }
+                paused = false;
+            } else {
+                paused = !paused;
+            }
+        }
 
         for (int t = 0; t < travelerCount; t++) {
             Traveler* tr = &travelers[t];
 
             if (tr->state != STATE_FINISHED && tr->pathCount > 1) {
-                allFinished = false;
-
-                if (tr->currentPathIdx < tr->pathCount - 1) {
+                if (!paused && !allFinished && tr->currentPathIdx < tr->pathCount - 1) {
                     tr->state = STATE_MOVING_EDGE;
 
                     int u = tr->path[tr->currentPathIdx];
@@ -455,23 +505,22 @@ int main(int argc, char* argv[]) {
                     tr->timer += dt;
 
                     if (tr->timer >= 0.3f) {
-                        tr->timer -= 0.3f;
+                        float overshoot = tr->timer - 0.3f;
+                        tr->timer = overshoot;
                         tr->currentJump++;
 
                         if (tr->currentJump >= weight) {
                             tr->currentPathIdx++;
                             tr->currentJump = 0;
-                            tr->timer = 0.0f;
+                            tr->timer = 0.0f; // Reset on node arrival
 
                             if (tr->currentPathIdx >= tr->pathCount - 1) {
+                                // Set state to finished BUT don't terminate immediately if we want to see it at the node
                                 tr->state = STATE_FINISHED;
                                 tr->position = (Vector2){
                                     nodes[tr->path[tr->currentPathIdx]].x,
                                     nodes[tr->path[tr->currentPathIdx]].y
                                 };
-
-                                kill(tr->pid, SIGTERM);
-                                printf("[%d] finished\n", tr->pid);
                             }
                         }
                     }
@@ -484,6 +533,7 @@ int main(int argc, char* argv[]) {
                         if (jumpProgress > 1.0f) jumpProgress = 1.0f;
 
                         float totalProgress = ((float)tr->currentJump + jumpProgress) / weight;
+                        if (totalProgress > 1.0f) totalProgress = 1.0f;
 
                         tr->position.x = start.x + (end.x - start.x) * totalProgress;
                         tr->position.y = start.y + (end.y - start.y) * totalProgress;
@@ -496,6 +546,13 @@ int main(int argc, char* argv[]) {
         ClearBackground(RAYWHITE);
 
         DrawText("Milestone 4: Multiple Processes and Parent Process", 10, 10, 20, DARKGRAY);
+
+        // Button
+        DrawRectangleRec(btnRect, hovered ? GRAY : LIGHTGRAY);
+        DrawRectangleLinesEx(btnRect, 3, DARKGRAY);
+        const char* btnLabel = (paused || allFinished) ? "START" : "STOP";
+        int textWidth = MeasureText(btnLabel, 20);
+        DrawText(btnLabel, btnRect.x + (btnRect.width - textWidth) / 2, btnRect.y + (btnRect.height - 20) / 2, 20, BLACK);
 
         for (int i = 0; i < N; i++) {
             for (int j = 0; j < nodes[i].count; j++) {
@@ -528,6 +585,9 @@ int main(int argc, char* argv[]) {
 
     for (int i = 0; i < travelerCount; i++) {
         if (travelers[i].pid > 0) {
+            if (travelers[i].state == STATE_FINISHED) {
+                printf("[%d] finished\n", travelers[i].pid);
+            }
             kill(travelers[i].pid, SIGTERM);
             waitpid(travelers[i].pid, NULL, 0);
         }
@@ -538,18 +598,26 @@ int main(int argc, char* argv[]) {
     free(startNodes);
     free(endNodes);
 
-#elif defined(MILESTONE5)
-        typedef struct {
+#elif defined(MILESTONE5) || defined(MILESTONE6)
+    typedef struct {
         pid_t pid;
         int travelerIndex;
         int currentNode;
         int nextNode;
-        int finished;
+        int weight; // For edge movement
+        int state; // 0: moving_edge, 1: waiting_node (M6), 2: arrived_node, 3: finished
     } IPCMessage;
 
     Color colors[] = { RED, BLUE, GREEN, ORANGE, PURPLE, MAROON, DARKGREEN, PINK };
     Traveler* travelers = calloc(travelerCount, sizeof(Traveler));
     int (*pipes)[2] = malloc(travelerCount * sizeof(int[2]));
+
+#ifdef MILESTONE6
+    sem_t* node_sems = mmap(NULL, N * sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    for (int i = 0; i < N; i++) {
+        sem_init(&node_sems[i], 1, 1);
+    }
+#endif
 
     const int screenWidth = 800;
     const int screenHeight = 600;
@@ -572,9 +640,13 @@ int main(int argc, char* argv[]) {
 
         travelers[i].startNode = startNodes[i];
         travelers[i].endNode = endNodes[i];
-        travelers[i].color = colors[i % 8];
+        if (i == 0) travelers[i].color = RED;
+        else if (i == 1) travelers[i].color = GREEN;
+        else travelers[i].color = colors[i % 8];
         travelers[i].position = (Vector2){ nodes[startNodes[i]].x, nodes[startNodes[i]].y };
+        travelers[i].targetPosition = travelers[i].position;
         travelers[i].state = STATE_PLAYING;
+        travelers[i].waitingAtNode = -1;
 
         pid_t pid = fork();
 
@@ -585,15 +657,49 @@ int main(int argc, char* argv[]) {
             int childPathCount = build_path(nodes, N, startNodes[i], endNodes[i], &childPath);
 
             for (int p = 0; p < childPathCount; p++) {
+                int curr = childPath[p];
+                int next = (p + 1 < childPathCount) ? childPath[p + 1] : -1;
+
                 IPCMessage msg;
                 msg.pid = getpid();
                 msg.travelerIndex = i;
-                msg.currentNode = childPath[p];
-                msg.nextNode = (p + 1 < childPathCount) ? childPath[p + 1] : -1;
-                msg.finished = (p == childPathCount - 1);
+                msg.currentNode = curr;
+                msg.nextNode = next;
+                msg.weight = 0;
 
+#ifdef MILESTONE6
+                // Signal waiting for node
+                msg.state = 1; // Waiting
                 write(pipes[i][1], &msg, sizeof(IPCMessage));
-                sleep(1);
+                sem_wait(&node_sems[curr]);
+#endif
+                // Arrived at node
+                msg.state = 2; // Arrived
+                write(pipes[i][1], &msg, sizeof(IPCMessage));
+                
+                sleep(1); // Stay in node for 1 second
+
+#ifdef MILESTONE6
+                sem_post(&node_sems[curr]);
+#endif
+
+                if (next != -1) {
+                    // Moving towards next node
+                    int w = 1;
+                    for (int e = 0; e < nodes[curr].count; e++) {
+                        if (nodes[curr].edges[e].to == next) {
+                            w = nodes[curr].edges[e].weight;
+                            break;
+                        }
+                    }
+                    msg.state = 0; // Moving Edge
+                    msg.weight = w;
+                    write(pipes[i][1], &msg, sizeof(IPCMessage));
+                    usleep(w * 300000); // 0.3s per weight unit
+                } else {
+                    msg.state = 3; // Finished
+                    write(pipes[i][1], &msg, sizeof(IPCMessage));
+                }
             }
 
             free(childPath);
@@ -608,40 +714,175 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    InitWindow(screenWidth, screenHeight, "Milestone 5 - IPC");
+    InitWindow(screenWidth, screenHeight, 
+#ifdef MILESTONE6
+               "Milestone 6 - Node Synchronization"
+#else
+               "Milestone 5 - IPC"
+#endif
+    );
     SetTargetFPS(60);
 
-    bool allFinished = false;
+    bool paused = false;
 
-    while (!WindowShouldClose() && !allFinished) {
-        allFinished = true;
+    while (!WindowShouldClose()) {
+        float dt = GetFrameTime();
+        
+        Rectangle btnRect = { 10, 40, 120, 40 };
+        Vector2 mousePos = GetMousePosition();
+        bool hovered = CheckCollisionPointRec(mousePos, btnRect);
+
+        bool allFinished = true;
+        for (int i = 0; i < travelerCount; i++) {
+            if (travelers[i].state != STATE_FINISHED) {
+                allFinished = false;
+                break;
+            }
+        }
+
+        if (hovered && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+            if (allFinished) {
+                // Restart simulation
+                for (int i = 0; i < travelerCount; i++) {
+                    if (travelers[i].pid > 0) {
+                        kill(travelers[i].pid, SIGKILL);
+                        waitpid(travelers[i].pid, NULL, 0);
+                    }
+                    // Drain old pipe data
+                    IPCMessage dummy;
+                    while (read(pipes[i][0], &dummy, sizeof(IPCMessage)) > 0);
+
+                    travelers[i].position = (Vector2){ nodes[travelers[i].startNode].x, nodes[travelers[i].startNode].y };
+                    travelers[i].targetPosition = travelers[i].position;
+                    travelers[i].state = STATE_PLAYING;
+                    travelers[i].waitingAtNode = -1;
+                    travelers[i].pendingFinish = false;
+
+                    pid_t pid = fork();
+                    if (pid == 0) {
+                        close(pipes[i][0]);
+                        int* childPath = NULL;
+                        int childPathCount = build_path(nodes, N, startNodes[i], endNodes[i], &childPath);
+                        for (int p = 0; p < childPathCount; p++) {
+                            int curr = childPath[p];
+                            int next = (p + 1 < childPathCount) ? childPath[p + 1] : -1;
+                            IPCMessage msg;
+                            msg.pid = getpid();
+                            msg.travelerIndex = i;
+                            msg.currentNode = curr;
+                            msg.nextNode = next;
+                            msg.weight = 0;
+#ifdef MILESTONE6
+                            msg.state = 1; write(pipes[i][1], &msg, sizeof(IPCMessage));
+                            sem_wait(&node_sems[curr]);
+#endif
+                            msg.state = 2; write(pipes[i][1], &msg, sizeof(IPCMessage));
+                            sleep(1);
+#ifdef MILESTONE6
+                            sem_post(&node_sems[curr]);
+#endif
+                            if (next != -1) {
+                                int w = 1;
+                                for (int e = 0; e < nodes[curr].count; e++) {
+                                    if (nodes[curr].edges[e].to == next) { w = nodes[curr].edges[e].weight; break; }
+                                }
+                                msg.state = 0; msg.weight = w;
+                                write(pipes[i][1], &msg, sizeof(IPCMessage));
+                                usleep(w * 300000);
+                            } else {
+                                msg.state = 3; write(pipes[i][1], &msg, sizeof(IPCMessage));
+                            }
+                        }
+                        free(childPath); close(pipes[i][1]); exit(0);
+                    } else if (pid > 0) {
+                        travelers[i].pid = pid;
+                    }
+                }
+                paused = false;
+            } else {
+                paused = !paused;
+            }
+        }
 
         for (int i = 0; i < travelerCount; i++) {
             IPCMessage msg;
 
-            while (read(pipes[i][0], &msg, sizeof(IPCMessage)) > 0) {
-                travelers[msg.travelerIndex].position =
-                    (Vector2){ nodes[msg.currentNode].x, nodes[msg.currentNode].y };
+            if (!paused && !allFinished) {
+                while (read(pipes[i][0], &msg, sizeof(IPCMessage)) > 0) {
+                    if (msg.state == 0) { // Moving Edge
+                        travelers[msg.travelerIndex].state = STATE_MOVING_EDGE;
+                        travelers[msg.travelerIndex].targetPosition = 
+                            (Vector2){ nodes[msg.nextNode].x, nodes[msg.nextNode].y };
+                        // Store weight to calculate speed
+                        travelers[msg.travelerIndex].currentJump = msg.weight;
+                    } else if (msg.state == 1) { // Waiting (M6)
+                        travelers[msg.travelerIndex].waitingAtNode = msg.currentNode;
+                        travelers[msg.travelerIndex].state = STATE_WAITING_NODE;
+                        travelers[msg.travelerIndex].position = 
+                            (Vector2){ nodes[msg.currentNode].x, nodes[msg.currentNode].y };
+                    } else if (msg.state == 2) { // Arrived
+                        travelers[msg.travelerIndex].waitingAtNode = -1;
+                        travelers[msg.travelerIndex].state = STATE_PLAYING;
+                        travelers[msg.travelerIndex].position =
+                            (Vector2){ nodes[msg.currentNode].x, nodes[msg.currentNode].y };
+                        travelers[msg.travelerIndex].targetPosition = travelers[msg.travelerIndex].position;
+                        
+                        if (msg.nextNode != -1) {
+                            printf("[PID=%d] arrived at node %d | next node: %d\n",
+                                   msg.pid, msg.currentNode, msg.nextNode);
+                        } else {
+                            printf("[PID=%d] arrived at node %d | DESTINATION\n", msg.pid, msg.currentNode);
+                        }
+                    } else if (msg.state == 3) { // Finished
+                        travelers[msg.travelerIndex].pendingFinish = true;
+                    }
+                }
 
-                if (msg.finished) {
-                    travelers[msg.travelerIndex].state = STATE_FINISHED;
-                    printf("[PID=%d] arrived at node %d | DESTINATION\n", msg.pid, msg.currentNode);
-                    printf("[PID=%d] finished\n", msg.pid);
-                } else {
-                    printf("[PID=%d] arrived at node %d | next node: %d\n",
-                           msg.pid, msg.currentNode, msg.nextNode);
+                // Smooth position update
+                if (travelers[i].state != STATE_FINISHED && travelers[i].state != STATE_WAITING_NODE) {
+                    float dist = Vector2Distance(travelers[i].position, travelers[i].targetPosition);
+                    if (dist > 1.0f) {
+                        float speed = 100.0f;
+                        if (travelers[i].state == STATE_MOVING_EDGE && travelers[i].currentJump > 0) {
+                            // speed = distance / time. time = weight * 0.3
+                            speed = dist / (travelers[i].currentJump * 0.3f);
+                        }
+                        float step = speed * dt;
+                        if (step > dist) {
+                            step = dist;
+                        }
+                        Vector2 dir = Vector2Normalize(Vector2Subtract(travelers[i].targetPosition, travelers[i].position));
+                        travelers[i].position = Vector2Add(travelers[i].position, Vector2Scale(dir, step));
+                    } else {
+                        // Close enough, snap to target
+                        travelers[i].position = travelers[i].targetPosition;
+                        if (travelers[i].pendingFinish) {
+                            travelers[i].state = STATE_FINISHED;
+                            printf("[PID=%d] finished\n", travelers[i].pid);
+                        }
+                    }
                 }
             }
 
-            if (travelers[i].state != STATE_FINISHED) {
-                allFinished = false;
-            }
         }
 
         BeginDrawing();
         ClearBackground(RAYWHITE);
 
-        DrawText("Milestone 5: IPC between processes", 10, 10, 20, DARKGRAY);
+        DrawText(
+#ifdef MILESTONE6
+            "Milestone 6: Node Synchronization (1 traveler per node)",
+#else
+            "Milestone 5: IPC between processes",
+#endif
+            10, 10, 20, DARKGRAY);
+
+        // Button
+        DrawRectangleRec(btnRect, hovered ? GRAY : LIGHTGRAY);
+        DrawRectangleLinesEx(btnRect, 3, DARKGRAY);
+        const char* btnLabel = (paused || allFinished) ? "START" : "STOP";
+        int textWidth = MeasureText(btnLabel, 20);
+        DrawText(btnLabel, btnRect.x + (btnRect.width - textWidth) / 2, btnRect.y + (btnRect.height - 20) / 2, 20, BLACK);
 
         for (int i = 0; i < N; i++) {
             for (int j = 0; j < nodes[i].count; j++) {
@@ -663,8 +904,29 @@ int main(int argc, char* argv[]) {
         }
 
         for (int i = 0; i < travelerCount; i++) {
-            DrawCircleV(travelers[i].position, 15, travelers[i].color);
-            DrawCircleLinesV(travelers[i].position, 15, BLACK);
+            if (travelers[i].state == STATE_FINISHED) continue;
+            
+            Vector2 pos = travelers[i].position;
+            Color col = travelers[i].color;
+
+            if (travelers[i].state == STATE_WAITING_NODE) {
+                int nodeIdx = travelers[i].waitingAtNode;
+                // Offset position to show waiting outside
+                pos.x = nodes[nodeIdx].x + 35;
+                pos.y = nodes[nodeIdx].y + 35;
+                // Draw with a different color or outline to indicate waiting
+                DrawCircleV(pos, 12, col);
+                DrawCircleLinesV(pos, 12, RED);
+                DrawText("WAIT", pos.x - 12, pos.y - 5, 10, MAROON);
+            } else if (travelers[i].state == STATE_MOVING_EDGE) {
+                // Moving between nodes
+                DrawCircleV(pos, 15, col);
+                DrawCircleLinesV(pos, 15, BLACK);
+            } else {
+                // Staying in node
+                DrawCircleV(pos, 15, col);
+                DrawCircleLinesV(pos, 15, BLACK);
+            }
         }
 
         EndDrawing();
@@ -676,6 +938,13 @@ int main(int argc, char* argv[]) {
         close(pipes[i][0]);
         waitpid(travelers[i].pid, NULL, 0);
     }
+
+#ifdef MILESTONE6
+    for (int i = 0; i < N; i++) {
+        sem_destroy(&node_sems[i]);
+    }
+    munmap(node_sems, N * sizeof(sem_t));
+#endif
 
     free(pipes);
     free(travelers);
@@ -767,18 +1036,19 @@ int main(int argc, char* argv[]) {
             int weight = 0;
             for(int i=0; i<nodes[u].count; i++) if(nodes[u].edges[i].to == v) { weight = nodes[u].edges[i].weight; break; }
 
-            if (timer >= 0.3f) {
-                timer -= 0.3f;
-                currentJump++;
-                if (currentJump >= weight) {
-                    currentPathIdx++;
-                    if (currentPathIdx == pathCount - 1) {
-                        state = STATE_FINISHED;
-                        entityPos = (Vector2){ nodes[path[currentPathIdx]].x, nodes[path[currentPathIdx]].y };
+                    if (timer >= 0.3f) {
+                        float overshoot = timer - 0.3f;
+                        timer = overshoot;
+                        currentJump++;
+                        if (currentJump >= weight) {
+                            currentPathIdx++;
+                            if (currentPathIdx == pathCount - 1) {
+                                state = STATE_FINISHED;
+                                entityPos = (Vector2){ nodes[path[currentPathIdx]].x, nodes[path[currentPathIdx]].y };
+                            }
+                            else { state = STATE_WAITING_NODE; timer = 0.0f; }
+                        }
                     }
-                    else { state = STATE_WAITING_NODE; timer = 0.0f; }
-                }
-            }
 
             // Smooth Jump-based Interpolation
             if (state == STATE_MOVING_EDGE) {
@@ -790,13 +1060,10 @@ int main(int argc, char* argv[]) {
                 if (jumpProgress > 1.0f) jumpProgress = 1.0f;
 
                 float totalProgress = ((float)currentJump + jumpProgress) / weight;
+                if (totalProgress > 1.0f) totalProgress = 1.0f;
 
                 entityPos.x = start.x + (end.x - start.x) * totalProgress;
                 entityPos.y = start.y + (end.y - start.y) * totalProgress;
-
-                // Add a "hop" effect during the jump timer
-                float hopHeight = sinf(jumpProgress * PI) * 30.0f;
-                entityPos.y -= hopHeight;
             }
         } else if (state == STATE_WAITING_NODE) {
             timer += dt;

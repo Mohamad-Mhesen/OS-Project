@@ -423,7 +423,9 @@ int main(int argc, char* argv[]) {
         pid_t pid = fork();
 
         if (pid == 0) {
+#ifdef MILESTONE4
             printf("[%d] started\n", getpid());
+#endif
             while (1) {
                 pause();
             }
@@ -471,7 +473,9 @@ int main(int argc, char* argv[]) {
 
                     pid_t pid = fork();
                     if (pid == 0) {
+#ifdef MILESTONE4
                         printf("[%d] started\n", getpid());
+#endif
                         while (1) pause();
                         exit(0);
                     } else if (pid > 0) {
@@ -488,8 +492,8 @@ int main(int argc, char* argv[]) {
             Traveler* tr = &travelers[t];
 
             if (tr->state != STATE_FINISHED && tr->pathCount > 1) {
-                if (!paused && !allFinished && tr->currentPathIdx < tr->pathCount - 1) {
-                    tr->state = STATE_MOVING_EDGE;
+                if (!paused && !allFinished && (tr->state == STATE_MOVING_EDGE || tr->state == STATE_PLAYING)) {
+                    if (tr->state == STATE_PLAYING) tr->state = STATE_MOVING_EDGE;
 
                     int u = tr->path[tr->currentPathIdx];
                     int v = tr->path[tr->currentPathIdx + 1];
@@ -515,12 +519,14 @@ int main(int argc, char* argv[]) {
                             tr->timer = 0.0f; // Reset on node arrival
 
                             if (tr->currentPathIdx >= tr->pathCount - 1) {
-                                // Set state to finished BUT don't terminate immediately if we want to see it at the node
+                                // Set state to finished
                                 tr->state = STATE_FINISHED;
                                 tr->position = (Vector2){
                                     nodes[tr->path[tr->currentPathIdx]].x,
                                     nodes[tr->path[tr->currentPathIdx]].y
                                 };
+                            } else {
+                                tr->state = STATE_WAITING_NODE;
                             }
                         }
                     }
@@ -537,6 +543,22 @@ int main(int argc, char* argv[]) {
 
                         tr->position.x = start.x + (end.x - start.x) * totalProgress;
                         tr->position.y = start.y + (end.y - start.y) * totalProgress;
+
+                        // إضافة تأثير القفزة (Arc effect) لكل قفزة صغيرة
+                        // نستخدم sin لعمل حركة مقوسة
+                        float hopHeight = sinf(jumpProgress * PI) * 20.0f;
+                        float angle = atan2f(end.y - start.y, end.x - start.x);
+                        // نزيح الموقع بشكل عمودي على اتجاه الحركة
+                        tr->position.x -= sinf(angle) * hopHeight;
+                        tr->position.y += cosf(angle) * hopHeight;
+                    }
+                } else if (!paused && tr->state == STATE_WAITING_NODE) {
+                    tr->timer += dt;
+                    tr->position = (Vector2){ nodes[tr->path[tr->currentPathIdx]].x, nodes[tr->path[tr->currentPathIdx]].y };
+                    if (tr->timer >= 1.0f) {
+                        tr->state = STATE_MOVING_EDGE;
+                        tr->timer = 0.0f;
+                        tr->currentJump = 0;
                     }
                 }
             }
@@ -574,8 +596,13 @@ int main(int argc, char* argv[]) {
         }
 
         for (int t = 0; t < travelerCount; t++) {
-            DrawCircleV(travelers[t].position, 15, travelers[t].color);
+            Color c = travelers[t].color;
+            if (travelers[t].state == STATE_WAITING_NODE) c = GRAY;
+            DrawCircleV(travelers[t].position, 15, c);
             DrawCircleLinesV(travelers[t].position, 15, BLACK);
+            if (travelers[t].state == STATE_FINISHED) {
+                DrawText("FINISHED", travelers[t].position.x - 30, travelers[t].position.y - 30, 10, travelers[t].color);
+            }
         }
 
         EndDrawing();
@@ -695,7 +722,9 @@ int main(int argc, char* argv[]) {
                     msg.state = 0; // Moving Edge
                     msg.weight = w;
                     write(pipes[i][1], &msg, sizeof(IPCMessage));
-                    usleep(w * 300000); // 0.3s per weight unit
+                    for(int j=0; j<w; j++) {
+                        usleep(300000); // 0.3s per jump
+                    }
                 } else {
                     msg.state = 3; // Finished
                     write(pipes[i][1], &msg, sizeof(IPCMessage));
@@ -815,6 +844,7 @@ int main(int argc, char* argv[]) {
                             (Vector2){ nodes[msg.nextNode].x, nodes[msg.nextNode].y };
                         // Store weight to calculate speed
                         travelers[msg.travelerIndex].currentJump = msg.weight;
+                        travelers[msg.travelerIndex].timer = 0.0f; // Track total time for this edge
                     } else if (msg.state == 1) { // Waiting (M6)
                         travelers[msg.travelerIndex].waitingAtNode = msg.currentNode;
                         travelers[msg.travelerIndex].state = STATE_WAITING_NODE;
@@ -826,6 +856,7 @@ int main(int argc, char* argv[]) {
                         travelers[msg.travelerIndex].position =
                             (Vector2){ nodes[msg.currentNode].x, nodes[msg.currentNode].y };
                         travelers[msg.travelerIndex].targetPosition = travelers[msg.travelerIndex].position;
+                        travelers[msg.travelerIndex].timer = 0.0f;
                         
                         if (msg.nextNode != -1) {
                             printf("[PID=%d] arrived at node %d | next node: %d\n",
@@ -843,16 +874,23 @@ int main(int argc, char* argv[]) {
                     float dist = Vector2Distance(travelers[i].position, travelers[i].targetPosition);
                     if (dist > 1.0f) {
                         float speed = 100.0f;
+                        float totalWeight = 1.0f;
                         if (travelers[i].state == STATE_MOVING_EDGE && travelers[i].currentJump > 0) {
-                            // speed = distance / time. time = weight * 0.3
-                            speed = dist / (travelers[i].currentJump * 0.3f);
+                            totalWeight = (float)travelers[i].currentJump;
+                            // Remaining distance / Remaining time
+                            float totalTime = totalWeight * 0.3f;
+                            float remainingTime = totalTime - travelers[i].timer;
+                            if (remainingTime < 0.01f) remainingTime = 0.01f;
+                            speed = dist / remainingTime;
                         }
+                        travelers[i].timer += dt;
                         float step = speed * dt;
                         if (step > dist) {
                             step = dist;
                         }
                         Vector2 dir = Vector2Normalize(Vector2Subtract(travelers[i].targetPosition, travelers[i].position));
-                        travelers[i].position = Vector2Add(travelers[i].position, Vector2Scale(dir, step));
+                        Vector2 nextPos = Vector2Add(travelers[i].position, Vector2Scale(dir, step));
+                        travelers[i].position = nextPos;
                     } else {
                         // Close enough, snap to target
                         travelers[i].position = travelers[i].targetPosition;
@@ -908,6 +946,23 @@ int main(int argc, char* argv[]) {
             
             Vector2 pos = travelers[i].position;
             Color col = travelers[i].color;
+
+            // تطبيق تأثير القفزة بصرياً فقط عند الرسم لضمان عدم تأثر الحسابات المنطقية
+            if (travelers[i].state == STATE_MOVING_EDGE) {
+                // محاكاة التقدم في القفزة بناءً على المسافة المتبقية للهدف
+                float distToTarget = Vector2Distance(pos, travelers[i].targetPosition);
+                // تقدير طول القفزة الواحدة (الوزن الكلي هو travelers[i].currentJump)
+                // إذا كان الوزن 1، فإن المسافة الكلية هي المسافة بين العقدتين
+                // سنستخدم جيب الزاوية لعمل قوس
+                float jumpProgress = fmodf(distToTarget, 50.0f) / 50.0f; // قفزة كل 50 بكسل تقريباً
+                float hopHeight = sinf(jumpProgress * PI) * 15.0f;
+                
+                // حساب زاوية الحركة للإزاحة العمودية
+                Vector2 diff = Vector2Subtract(travelers[i].targetPosition, pos);
+                float angle = atan2f(diff.y, diff.x);
+                pos.x -= sinf(angle) * hopHeight;
+                pos.y += cosf(angle) * hopHeight;
+            }
 
             if (travelers[i].state == STATE_WAITING_NODE) {
                 int nodeIdx = travelers[i].waitingAtNode;
@@ -1042,11 +1097,13 @@ int main(int argc, char* argv[]) {
                         currentJump++;
                         if (currentJump >= weight) {
                             currentPathIdx++;
-                            if (currentPathIdx == pathCount - 1) {
+                            currentJump = 0;
+                            timer = 0.0f;
+                            if (currentPathIdx >= pathCount - 1) {
                                 state = STATE_FINISHED;
                                 entityPos = (Vector2){ nodes[path[currentPathIdx]].x, nodes[path[currentPathIdx]].y };
                             }
-                            else { state = STATE_WAITING_NODE; timer = 0.0f; }
+                            else { state = STATE_WAITING_NODE; }
                         }
                     }
 
@@ -1064,6 +1121,12 @@ int main(int argc, char* argv[]) {
 
                 entityPos.x = start.x + (end.x - start.x) * totalProgress;
                 entityPos.y = start.y + (end.y - start.y) * totalProgress;
+
+                // إضافة تأثير القفزة (Arc effect)
+                float hopHeight = sinf(jumpProgress * PI) * 20.0f;
+                float angle = atan2f(end.y - start.y, end.x - start.x);
+                entityPos.x -= sinf(angle) * hopHeight;
+                entityPos.y += cosf(angle) * hopHeight;
             }
         } else if (state == STATE_WAITING_NODE) {
             timer += dt;

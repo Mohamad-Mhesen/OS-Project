@@ -706,10 +706,6 @@ int main(int argc, char* argv[]) {
                 
                 sleep(1); // Stay in node for 1 second
 
-#ifdef MILESTONE6
-                sem_post(&node_sems[curr]);
-#endif
-
                 if (next != -1) {
                     // Moving towards next node
                     int w = 1;
@@ -729,6 +725,9 @@ int main(int argc, char* argv[]) {
                     msg.state = 3; // Finished
                     write(pipes[i][1], &msg, sizeof(IPCMessage));
                 }
+#ifdef MILESTONE6
+                sem_post(&node_sems[curr]);
+#endif
             }
 
             free(childPath);
@@ -807,9 +806,6 @@ int main(int argc, char* argv[]) {
 #endif
                             msg.state = 2; write(pipes[i][1], &msg, sizeof(IPCMessage));
                             sleep(1);
-#ifdef MILESTONE6
-                            sem_post(&node_sems[curr]);
-#endif
                             if (next != -1) {
                                 int w = 1;
                                 for (int e = 0; e < nodes[curr].count; e++) {
@@ -821,6 +817,9 @@ int main(int argc, char* argv[]) {
                             } else {
                                 msg.state = 3; write(pipes[i][1], &msg, sizeof(IPCMessage));
                             }
+#ifdef MILESTONE6
+                            sem_post(&node_sems[curr]);
+#endif
                         }
                         free(childPath); close(pipes[i][1]); exit(0);
                     } else if (pid > 0) {

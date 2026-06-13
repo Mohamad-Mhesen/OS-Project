@@ -20,6 +20,5 @@ milestone4: main.c
 
 milestone5: main.c
 	$(CC) $(CFLAGS) -DMILESTONE5 -o sim main.c $(LIBS)
-
 clean:
 	rm -f dijkstra sim

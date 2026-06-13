@@ -44,11 +44,6 @@ The graph represents a city's metro network where trains move between stations b
 - **Execution**: `./sim <file_name>`
 - **Description**: Implements a locking mechanism using **Semaphores** (in shared memory) to ensure that no more than one traveler is inside a node at any given time. Travelers arriving at a node while it's occupied wait outside, visualized in the GUI.
 
-### Features Added (Current Session)
-- **Smooth Movement**: Entities now move smoothly between nodes using interpolation.
-- **Dynamic Colors**: The first traveler is colored **Red** and the second is **Green** for better identification.
-- **Start/Stop Control**: A button was added to the GUI to pause and resume the simulation at any time.
-
 ## General
 - **Clean Project**: `make clean`
 - **Execution for all Milestones (2-6)**: `./sim <file_name>`

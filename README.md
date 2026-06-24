@@ -37,12 +37,26 @@ The graph represents a city's metro network where trains move between stations b
 ### Milestone 5: Inter-Process Communication (IPC)
 - **Compilation**: `make milestone5`
 - **Execution**: `./sim <file_name>`
-- **Description**: Child processes become autonomous, calculating their own routes and reporting their status to the parent using **Pipes**. The parent process updates the GUI and prints detailed logs to the terminal. Pipes were chosen for their simplicity and effectiveness in one-way communication from multiple children to a single parent.
+- **Description**: Child processes become autonomous, calculating their own routes and reporting their status to the parent using **Pipes**. The parent process updates the GUI and prints detailed logs to the terminal. Pipes were chosen for their simplicity and effectiveness in one-way communication from multiple children to a single parent. Every "jump" (weight unit) takes exactly 0.3 seconds.
 
 ### Milestone 6: Node Synchronization
 - **Compilation**: `make milestone6`
 - **Execution**: `./sim <file_name>`
-- **Description**: Implements a locking mechanism using **Semaphores** (in shared memory) to ensure that no more than one traveler is inside a node at any given time. Travelers arriving at a node while it's occupied wait outside, visualized in the GUI.
+- **Description**: Implements a locking mechanism using **Semaphores** (in shared memory) to ensure that no more than one traveler is inside a node at any given time. Travelers arriving at a node while it's occupied wait outside (clearly marked with a RED border and "WAIT" label in GUI).
+
+### Milestone 7: Scheduling Algorithms
+- **Compilation**: `make milestone7`
+- **Execution**:
+  - `./sim-schd fcfs <file_name>`
+  - `./sim-schd sjf <file_name>`
+- **Description**: Replaces the semaphore mechanism with a parent-managed scheduler. Supports **FCFS** (First-Come, First-Served) and **SJF** (Shortest Job First, based on remaining distance). The parent manages waiting queues and wakes processes using signals (`SIGSTOP`/`SIGCONT`).
+
+### Features Added (Current Session)
+- **Advanced Scheduling**: Support for FCFS and SJF algorithms.
+- **Signal-based Synchronization**: Parent process controls child process execution using signals.
+- **Smooth Movement**: Entities now move smoothly between nodes using interpolation.
+- **Dynamic Colors**: The first traveler is colored **Red** and the second is **Green** for better identification.
+- **Start/Stop Control**: A button was added to the GUI to pause and resume the simulation at any time.
 
 ## General
 - **Clean Project**: `make clean`

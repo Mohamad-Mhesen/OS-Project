@@ -5,18 +5,19 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <math.h>
+#include <string.h>
 
-#if defined(MILESTONE2) || defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
+#if defined(MILESTONE2) || defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6) || defined(MILESTONE7)
 #include "raylib.h"
 #include "raymath.h"
 #endif
-#if defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
+#if defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6) || defined(MILESTONE7)
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
 #endif
 
-#if defined(MILESTONE5) || defined(MILESTONE6)
+#if defined(MILESTONE5) || defined(MILESTONE6) || defined(MILESTONE7)
 #include <fcntl.h>
 #endif
 
@@ -39,7 +40,7 @@ typedef struct {
     float x, y; // Added for GUI positioning
 } Node;
 
-#if defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
+#if defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6) || defined(MILESTONE7)
 typedef enum {
     STATE_STOPPED,
     STATE_PLAYING,
@@ -48,7 +49,7 @@ typedef enum {
     STATE_FINISHED
 } AnimState;
 
-#if defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
+#if defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6) || defined(MILESTONE7)
 typedef struct {
     pid_t pid;
     int startNode;
@@ -69,6 +70,7 @@ typedef struct {
     Vector2 targetPosition; // Milestone 5/6 smooth movement
     int nextNodeIdx; // Milestone 5/6 smooth movement
     bool pendingFinish; // Added to handle delayed finish after smooth movement
+    int remainingDistance; // Added for SJF (Milestone 7)
 } Traveler;
 #endif
 #endif
@@ -91,7 +93,7 @@ void print_path(int* parent, int j) {
     print_path(parent, parent[j]);
     printf(" -> %d", j);
 }
-#if defined(MILESTONE2) || defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
+#if defined(MILESTONE2) || defined(MILESTONE3) || defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6) || defined(MILESTONE7)
 void DrawArrow(Vector2 start, Vector2 end, int weight) {
     float angle = atan2f(end.y - start.y, end.x - start.x);
     float arrowSize = 15.0f;
@@ -215,7 +217,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    FILE* fp = fopen(argv[1], "r");
+    FILE* fp = NULL;
+#ifdef MILESTONE7
+    if (argc >= 3) {
+        fp = fopen(argv[2], "r");
+    } else {
+        fp = fopen(argv[1], "r");
+    }
+#else
+    fp = fopen(argv[1], "r");
+#endif
     if (fp == NULL) {
         perror("Error opening file");
         return 1;
@@ -252,7 +263,7 @@ int main(int argc, char* argv[]) {
         add_edge(nodes, src, dst, weight);
     }
 
-#if defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6)
+#if defined(MILESTONE4) || defined(MILESTONE5) || defined(MILESTONE6) || defined(MILESTONE7)
     int travelerCount;
     if (fscanf(fp, "%d", &travelerCount) != 1) {
         fprintf(stderr, "Invalid travelers count\n");
@@ -293,7 +304,7 @@ int main(int argc, char* argv[]) {
 #endif
     }
 #endif
-#if !defined(MILESTONE2) && !defined(MILESTONE3) && !defined(MILESTONE4) && !defined(MILESTONE5) && !defined(MILESTONE6)
+#if !defined(MILESTONE2) && !defined(MILESTONE3) && !defined(MILESTONE4) && !defined(MILESTONE5) && !defined(MILESTONE6) && !defined(MILESTONE7)
     int* dist = malloc(N * sizeof(int));
     int* parent = malloc(N * sizeof(int));
     bool* visited = calloc(N, sizeof(bool));
@@ -423,8 +434,9 @@ int main(int argc, char* argv[]) {
         pid_t pid = fork();
 
         if (pid == 0) {
-#ifdef MILESTONE4
+#if defined(MILESTONE4)
             printf("[%d] started\n", getpid());
+            fflush(stdout);
 #endif
             while (1) {
                 pause();
@@ -475,6 +487,7 @@ int main(int argc, char* argv[]) {
                     if (pid == 0) {
 #ifdef MILESTONE4
                         printf("[%d] started\n", getpid());
+                        fflush(stdout);
 #endif
                         while (1) pause();
                         exit(0);
@@ -617,23 +630,47 @@ int main(int argc, char* argv[]) {
             }
             kill(travelers[i].pid, SIGTERM);
             waitpid(travelers[i].pid, NULL, 0);
+            }
+            free(travelers[i].path);
         }
-        free(travelers[i].path);
-    }
 
-    free(travelers);
+#ifdef MILESTONE7
+        for(int i=0; i<N; i++) free(nodeQueues[i]);
+        free(nodeQueues);
+        free(nodeQueueSizes);
+        free(nodeOccupant);
+#endif
+
+        free(travelers);
     free(startNodes);
     free(endNodes);
 
-#elif defined(MILESTONE5) || defined(MILESTONE6)
+#elif defined(MILESTONE5) || defined(MILESTONE6) || defined(MILESTONE7)
     typedef struct {
         pid_t pid;
         int travelerIndex;
         int currentNode;
         int nextNode;
         int weight; // For edge movement
-        int state; // 0: moving_edge, 1: waiting_node (M6), 2: arrived_node, 3: finished
+        int state; // 0: moving_edge, 1: waiting_node (M6/7), 2: arrived_node, 3: finished
+        int remainingDistance; // For SJF (M7)
     } IPCMessage;
+
+    typedef enum { SCHED_FCFS, SCHED_SJF } SchedType;
+    SchedType currentSched = SCHED_FCFS;
+    if (argc >= 3) {
+        if (strcmp(argv[1], "fcfs") == 0) currentSched = SCHED_FCFS;
+        else if (strcmp(argv[1], "sjf") == 0) currentSched = SCHED_SJF;
+    }
+    
+    // Node occupant: -1 if free, else travelerIndex
+    int* nodeOccupant = malloc(N * sizeof(int));
+    for(int i=0; i<N; i++) nodeOccupant[i] = -1;
+
+    // Waiting queues for each node (array of traveler indices)
+    int** nodeQueues = malloc(N * sizeof(int*));
+    int* nodeQueueSizes = calloc(N, sizeof(int));
+    for(int i=0; i<N; i++) nodeQueues[i] = malloc(travelerCount * sizeof(int));
 
     Color colors[] = { RED, BLUE, GREEN, ORANGE, PURPLE, MAROON, DARKGREEN, PINK };
     Traveler* travelers = calloc(travelerCount, sizeof(Traveler));
@@ -700,6 +737,26 @@ int main(int argc, char* argv[]) {
                 write(pipes[i][1], &msg, sizeof(IPCMessage));
                 sem_wait(&node_sems[curr]);
 #endif
+#ifdef MILESTONE7
+                // Calculate remaining distance for SJF
+                int remDist = 0;
+                for (int rp = p; rp < childPathCount - 1; rp++) {
+                    int c_curr = childPath[rp];
+                    int c_next = childPath[rp+1];
+                    for (int e = 0; e < nodes[c_curr].count; e++) {
+                        if (nodes[c_curr].edges[e].to == c_next) {
+                            remDist += nodes[c_curr].edges[e].weight;
+                            break;
+                        }
+                    }
+                }
+                msg.remainingDistance = remDist;
+                msg.state = 1; // Waiting
+                write(pipes[i][1], &msg, sizeof(IPCMessage));
+                
+                // Wait for SIGCONT from parent
+                raise(SIGSTOP);
+#endif
                 // Arrived at node
                 msg.state = 2; // Arrived
                 write(pipes[i][1], &msg, sizeof(IPCMessage));
@@ -718,12 +775,22 @@ int main(int argc, char* argv[]) {
                     msg.state = 0; // Moving Edge
                     msg.weight = w;
                     write(pipes[i][1], &msg, sizeof(IPCMessage));
+#ifdef MILESTONE7
+                    // Release node before moving (Milestone 7)
+                    // The parent will handle waking up the next traveler
+                    msg.state = 4; // Node Released
+                    write(pipes[i][1], &msg, sizeof(IPCMessage));
+#endif
                     for(int j=0; j<w; j++) {
                         usleep(300000); // 0.3s per jump
                     }
                 } else {
                     msg.state = 3; // Finished
                     write(pipes[i][1], &msg, sizeof(IPCMessage));
+#ifdef MILESTONE7
+                    msg.state = 4; // Node Released
+                    write(pipes[i][1], &msg, sizeof(IPCMessage));
+#endif
                 }
 #ifdef MILESTONE6
                 sem_post(&node_sems[curr]);
@@ -844,11 +911,45 @@ int main(int argc, char* argv[]) {
                         // Store weight to calculate speed
                         travelers[msg.travelerIndex].currentJump = msg.weight;
                         travelers[msg.travelerIndex].timer = 0.0f; // Track total time for this edge
-                    } else if (msg.state == 1) { // Waiting (M6)
+                    } else if (msg.state == 1) { // Waiting (M6/7)
                         travelers[msg.travelerIndex].waitingAtNode = msg.currentNode;
                         travelers[msg.travelerIndex].state = STATE_WAITING_NODE;
                         travelers[msg.travelerIndex].position = 
                             (Vector2){ nodes[msg.currentNode].x, nodes[msg.currentNode].y };
+#ifdef MILESTONE7
+                        travelers[msg.travelerIndex].remainingDistance = msg.remainingDistance;
+                        // Add to node queue
+                        int n = msg.currentNode;
+                        nodeQueues[n][nodeQueueSizes[n]++] = msg.travelerIndex;
+                        
+                        // If node is free, trigger scheduler
+                        if (nodeOccupant[n] == -1) {
+                            // Find next to wake up
+                            int nextToWake = -1;
+                            if (currentSched == SCHED_FCFS) {
+                                nextToWake = nodeQueues[n][0];
+                                // Shift queue
+                                for(int q=0; q<nodeQueueSizes[n]-1; q++) nodeQueues[n][q] = nodeQueues[n][q+1];
+                                nodeQueueSizes[n]--;
+                            } else {
+                                // SJF
+                                int minIdx = 0;
+                                for(int q=1; q<nodeQueueSizes[n]; q++) {
+                                    if (travelers[nodeQueues[n][q]].remainingDistance < travelers[nodeQueues[n][minIdx]].remainingDistance) {
+                                        minIdx = q;
+                                    }
+                                }
+                                nextToWake = nodeQueues[n][minIdx];
+                                // Remove from queue
+                                for(int q=minIdx; q<nodeQueueSizes[n]-1; q++) nodeQueues[n][q] = nodeQueues[n][q+1];
+                                nodeQueueSizes[n]--;
+                            }
+                            if (nextToWake != -1) {
+                                nodeOccupant[n] = nextToWake;
+                                kill(travelers[nextToWake].pid, SIGCONT);
+                            }
+                        }
+#endif
                     } else if (msg.state == 2) { // Arrived
                         travelers[msg.travelerIndex].waitingAtNode = -1;
                         travelers[msg.travelerIndex].state = STATE_PLAYING;
@@ -863,9 +964,39 @@ int main(int argc, char* argv[]) {
                         } else {
                             printf("[PID=%d] arrived at node %d | DESTINATION\n", msg.pid, msg.currentNode);
                         }
+                        fflush(stdout);
                     } else if (msg.state == 3) { // Finished
                         travelers[msg.travelerIndex].pendingFinish = true;
                     }
+#ifdef MILESTONE7
+                    else if (msg.state == 4) { // Node Released
+                        int n = msg.currentNode;
+                        nodeOccupant[n] = -1;
+                        if (nodeQueueSizes[n] > 0) {
+                            int nextToWake = -1;
+                            if (currentSched == SCHED_FCFS) {
+                                nextToWake = nodeQueues[n][0];
+                                for(int q=0; q<nodeQueueSizes[n]-1; q++) nodeQueues[n][q] = nodeQueues[n][q+1];
+                                nodeQueueSizes[n]--;
+                            } else {
+                                // SJF
+                                int minIdx = 0;
+                                for(int q=1; q<nodeQueueSizes[n]; q++) {
+                                    if (travelers[nodeQueues[n][q]].remainingDistance < travelers[nodeQueues[n][minIdx]].remainingDistance) {
+                                        minIdx = q;
+                                    }
+                                }
+                                nextToWake = nodeQueues[n][minIdx];
+                                for(int q=minIdx; q<nodeQueueSizes[n]-1; q++) nodeQueues[n][q] = nodeQueues[n][q+1];
+                                nodeQueueSizes[n]--;
+                            }
+                            if (nextToWake != -1) {
+                                nodeOccupant[n] = nextToWake;
+                                kill(travelers[nextToWake].pid, SIGCONT);
+                            }
+                        }
+                    }
+#endif
                 }
 
                 // Smooth position update
@@ -896,6 +1027,7 @@ int main(int argc, char* argv[]) {
                         if (travelers[i].pendingFinish) {
                             travelers[i].state = STATE_FINISHED;
                             printf("[PID=%d] finished\n", travelers[i].pid);
+                            fflush(stdout);
                         }
                     }
                 }
@@ -907,12 +1039,17 @@ int main(int argc, char* argv[]) {
         ClearBackground(RAYWHITE);
 
         DrawText(
-#ifdef MILESTONE6
+#ifdef MILESTONE7
+            TextFormat("Scheduler: %s", currentSched == SCHED_FCFS ? "FCFS" : "SJF"),
+#elif defined(MILESTONE6)
             "Milestone 6: Node Synchronization (1 traveler per node)",
 #else
             "Milestone 5: IPC between processes",
 #endif
             10, 10, 20, DARKGRAY);
+#ifdef MILESTONE7
+        DrawText("Milestone 7: Advanced Scheduling", 10, 40, 20, DARKGRAY);
+#endif
 
         // Button
         DrawRectangleRec(btnRect, hovered ? GRAY : LIGHTGRAY);

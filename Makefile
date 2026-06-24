@@ -2,9 +2,9 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c11
 LIBS = -lraylib -lm -lpthread -ldl -lrt
 
-.PHONY: all milestone1 milestone2 milestone3 milestone4 milestone5 clean
+.PHONY: all milestone1 milestone2 milestone3 milestone4 milestone5 milestone6 milestone7 clean
 
-all: milestone1 milestone2 milestone3 milestone4 milestone5
+all: milestone1 milestone2 milestone3 milestone4 milestone5 milestone6 milestone7
 
 milestone1: main.c
 	$(CC) $(CFLAGS) -o dijkstra main.c $(LIBS)
@@ -23,5 +23,9 @@ milestone5: main.c
 
 milestone6: main.c
 	$(CC) $(CFLAGS) -DMILESTONE6 -o sim main.c $(LIBS)
+
+milestone7: main.c
+	$(CC) $(CFLAGS) -DMILESTONE7 -o sim-schd main.c $(LIBS)
+
 clean:
-	rm -f dijkstra sim
+	rm -f dijkstra sim sim-schd

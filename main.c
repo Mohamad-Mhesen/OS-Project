@@ -656,11 +656,12 @@ int main(int argc, char* argv[]) {
         int remainingDistance; // For SJF (M7)
     } IPCMessage;
 
-    typedef enum { SCHED_FCFS, SCHED_SJF } SchedType;
+    typedef enum { SCHED_FCFS, SCHED_SJF, SCHED_PRIORITY } SchedType;
     SchedType currentSched = SCHED_FCFS;
-    if (argc >= 3) {
+    if (argc >= 2) {
         if (strcmp(argv[1], "fcfs") == 0) currentSched = SCHED_FCFS;
         else if (strcmp(argv[1], "sjf") == 0) currentSched = SCHED_SJF;
+        else if (strcmp(argv[1], "priority") == 0) currentSched = SCHED_PRIORITY;
     }
     
     // Node occupant: -1 if free, else travelerIndex
@@ -697,6 +698,7 @@ int main(int argc, char* argv[]) {
     }
 
     for (int i = 0; i < travelerCount; i++) {
+        
         if (pipe(pipes[i]) == -1) {
             perror("pipe failed");
             continue;
@@ -867,7 +869,23 @@ int main(int argc, char* argv[]) {
                             msg.currentNode = curr;
                             msg.nextNode = next;
                             msg.weight = 0;
-#ifdef MILESTONE6
+#ifdef MILESTONE7
+                            // Calculate remaining distance
+                            int remDist = 0;
+                            for (int rp = p; rp < childPathCount - 1; rp++) {
+                                int c_curr = childPath[rp];
+                                int c_next = childPath[rp+1];
+                                for (int e = 0; e < nodes[c_curr].count; e++) {
+                                    if (nodes[c_curr].edges[e].to == c_next) {
+                                        remDist += nodes[c_curr].edges[e].weight;
+                                        break;
+                                    }
+                                }
+                            }
+                            msg.remainingDistance = remDist;
+                            msg.state = 1; write(pipes[i][1], &msg, sizeof(IPCMessage));
+                            raise(SIGSTOP);
+#elif defined(MILESTONE6)
                             msg.state = 1; write(pipes[i][1], &msg, sizeof(IPCMessage));
                             sem_wait(&node_sems[curr]);
 #endif
@@ -880,9 +898,15 @@ int main(int argc, char* argv[]) {
                                 }
                                 msg.state = 0; msg.weight = w;
                                 write(pipes[i][1], &msg, sizeof(IPCMessage));
+#ifdef MILESTONE7
+                                msg.state = 4; write(pipes[i][1], &msg, sizeof(IPCMessage));
+#endif
                                 usleep(w * 300000);
                             } else {
                                 msg.state = 3; write(pipes[i][1], &msg, sizeof(IPCMessage));
+#ifdef MILESTONE7
+                                msg.state = 4; write(pipes[i][1], &msg, sizeof(IPCMessage));
+#endif
                             }
 #ifdef MILESTONE6
                             sem_post(&node_sems[curr]);
@@ -931,11 +955,23 @@ int main(int argc, char* argv[]) {
                                 // Shift queue
                                 for(int q=0; q<nodeQueueSizes[n]-1; q++) nodeQueues[n][q] = nodeQueues[n][q+1];
                                 nodeQueueSizes[n]--;
-                            } else {
+                            } else if (currentSched == SCHED_SJF) {
                                 // SJF
                                 int minIdx = 0;
                                 for(int q=1; q<nodeQueueSizes[n]; q++) {
                                     if (travelers[nodeQueues[n][q]].remainingDistance < travelers[nodeQueues[n][minIdx]].remainingDistance) {
+                                        minIdx = q;
+                                    }
+                                }
+                                nextToWake = nodeQueues[n][minIdx];
+                                // Remove from queue
+                                for(int q=minIdx; q<nodeQueueSizes[n]-1; q++) nodeQueues[n][q] = nodeQueues[n][q+1];
+                                nodeQueueSizes[n]--;
+                            } else if (currentSched == SCHED_PRIORITY) {
+                                // Priority (lowest PID)
+                                int minIdx = 0;
+                                for(int q=1; q<nodeQueueSizes[n]; q++) {
+                                    if (travelers[nodeQueues[n][q]].pid < travelers[nodeQueues[n][minIdx]].pid) {
                                         minIdx = q;
                                     }
                                 }
@@ -978,11 +1014,22 @@ int main(int argc, char* argv[]) {
                                 nextToWake = nodeQueues[n][0];
                                 for(int q=0; q<nodeQueueSizes[n]-1; q++) nodeQueues[n][q] = nodeQueues[n][q+1];
                                 nodeQueueSizes[n]--;
-                            } else {
+                            } else if (currentSched == SCHED_SJF) {
                                 // SJF
                                 int minIdx = 0;
                                 for(int q=1; q<nodeQueueSizes[n]; q++) {
                                     if (travelers[nodeQueues[n][q]].remainingDistance < travelers[nodeQueues[n][minIdx]].remainingDistance) {
+                                        minIdx = q;
+                                    }
+                                }
+                                nextToWake = nodeQueues[n][minIdx];
+                                for(int q=minIdx; q<nodeQueueSizes[n]-1; q++) nodeQueues[n][q] = nodeQueues[n][q+1];
+                                nodeQueueSizes[n]--;
+                            } else if (currentSched == SCHED_PRIORITY) {
+                                // Priority (lowest PID)
+                                int minIdx = 0;
+                                for(int q=1; q<nodeQueueSizes[n]; q++) {
+                                    if (travelers[nodeQueues[n][q]].pid < travelers[nodeQueues[n][minIdx]].pid) {
                                         minIdx = q;
                                     }
                                 }
@@ -1040,7 +1087,7 @@ int main(int argc, char* argv[]) {
 
         DrawText(
 #ifdef MILESTONE7
-            TextFormat("Scheduler: %s", currentSched == SCHED_FCFS ? "FCFS" : "SJF"),
+            TextFormat("Scheduler: %s", currentSched == SCHED_FCFS ? "FCFS" : (currentSched == SCHED_SJF ? "SJF" : "PRIORITY")),
 #elif defined(MILESTONE6)
             "Milestone 6: Node Synchronization (1 traveler per node)",
 #else
